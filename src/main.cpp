@@ -1,104 +1,196 @@
-#include <Arduino.h>
+#include <LiquidCrystal_I2C.h>
 
-// กำหนดขา ADC สำหรับ Potentiometer 4 ตัว
-int potPins[] = {36, 39, 12, 13};
-// กำหนดขา GPIO สำหรับ LED 8 ดวง (แบ่งเป็น 4 กลุ่ม)
-int ledPins[][2] = {{23, 19}, {18, 5}, {17, 16}, {4, 0}};
-// PWM Channels สำหรับ LED แต่ละดวง
-int pwmChannels[] = {0, 1, 2, 3, 4, 5, 6, 7};
-int pwmFrequency = 5000;  // ความถี่ PWM 5kHz
-int pwmResolution = 8;    // ความละเอียด PWM 8 บิต (0-255)
-// ขา Digital Input สำหรับ Switch 6 ตัว
-int switchPins[] = {15, 2, 34, 35, 32, 33}; 
+LiquidCrystal_I2C lcd(0x27, 20, 4); // set the LCD address to 0x27 for a 16 chars and 2 line display
 
-bool chasingMode = false;  // โหมด Chasing LED
-bool systemEnabled = true; // ระบบเปิด/ปิด LED
+int menu = 0;
+
+int sw_next = 15;
+int sw_ok = 2;
+
+int leds[] = {23, 19, 18, 5, 17, 16, 4, 0};
+const int num_leds = sizeof(leds) / sizeof(leds[0]);
+
+// Function prototypes
+void executeMenu(int menu);
+void turnOnAllLEDs();
+void blinkAlternateLEDs();
+void rotateSingleLED();
+void blinkInPairs();
+void sequentialOnOff();
+void blinkAllLEDs();
+void turnOffAllLEDs();
 
 void setup() {
-  // ตั้งค่า PWM สำหรับ LED
-  for (int group = 0; group < 4; group++) {
-    for (int led = 0; led < 2; led++) {
-      int pin = ledPins[group][led];
-      int channel = pwmChannels[group * 2 + led];
-      ledcAttachPin(pin, channel);
-      ledcSetup(channel, pwmFrequency, pwmResolution);
-    }
-  }
+    lcd.init(); // initialize the LCD
+    lcd.backlight();
 
-  // ตั้งค่า Switch เป็น Input
-  for (int i = 0; i < 6; i++) {
-    pinMode(switchPins[i], INPUT_PULLUP);
-  }
+    pinMode(sw_next, INPUT_PULLUP);
+    pinMode(sw_ok, INPUT_PULLUP);
+
+    for (int i = 0; i < num_leds; i++) {
+        pinMode(leds[i], OUTPUT);
+    }
+
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Menu: 0");
 }
 
 void loop() {
-  static bool lastSwitch5State = HIGH;
-  static bool lastSwitch6State = HIGH;
+    static int last_next_state = HIGH;
+    static int current_menu = 0;
+    static unsigned long last_action_time = 0;
 
-  // ตรวจสอบ Switch ที่ 5 สำหรับสลับโหมดระหว่าง Potentiometer และ Chasing LED
-  bool currentSwitch5State = digitalRead(switchPins[4]);
-  if (lastSwitch5State == HIGH && currentSwitch5State == LOW) {
-    chasingMode = !chasingMode; // สลับโหมด
-    delay(200); // Debounce
-  }
-  lastSwitch5State = currentSwitch5State;
+    int current_next_state = digitalRead(sw_next);
 
-  // ตรวจสอบ Switch ที่ 6 สำหรับเปิด/ปิดระบบทั้งหมด
-  bool currentSwitch6State = digitalRead(switchPins[5]);
-  if (lastSwitch6State == HIGH && currentSwitch6State == LOW) {
-    systemEnabled = !systemEnabled; // สลับสถานะระบบ
-    delay(200); // Debounce
-  }
-  lastSwitch6State = currentSwitch6State;
-
-  // หากระบบถูกปิด ให้ปิดไฟ LED ทั้งหมดและหยุดการทำงาน
-  if (!systemEnabled) {
-    for (int i = 0; i < 8; i++) {
-      int channel = pwmChannels[i];
-      ledcWrite(channel, 0); // ปิดไฟ LED ทุกดวง
-    }
-    return; // ออกจาก loop
-  }
-
-  // ระบบทำงานปกติ
-  if (chasingMode) {
-    // โหมด Chasing LED
-    for (int i = 0; i < 8; i++) {
-      for (int j = 0; j < 8; j++) {
-        int channel = pwmChannels[j];
-        ledcWrite(channel, (j == i) ? 255 : 0);
-      }
-      delay(200); // หน่วงเวลาเพื่อให้เกิดเอฟเฟกต์วิ่ง
-    }
-  } else {
-    // โหมดหรี่ไฟ (ควบคุมด้วย Potentiometer)
-    for (int group = 0; group < 4; group++) {
-      // ตรวจสอบสถานะของ Switch
-      if (digitalRead(switchPins[group]) == LOW) {
-        // Switch ปิด -> ปิด LED ทั้งสองดวงในกลุ่ม
-        for (int led = 0; led < 2; led++) {
-          int channel = pwmChannels[group * 2 + led];
-          ledcWrite(channel, 0);
+    // Handle menu navigation
+    if (current_next_state == LOW && last_next_state == HIGH) {
+        menu++;
+        if (menu > 6) {
+            menu = 0;
         }
-      } else {
-        // Switch เปิด -> ใช้งาน Potentiometer
-        int potValue = analogRead(potPins[group]);
-        int dutyCycle = map(potValue, 0, 4095, 0, 255);
-        for (int led = 0; led < 2; led++) {
-          int channel = pwmChannels[group * 2 + led];
-          ledcWrite(channel, dutyCycle);
-        }
-      }
-    }
-  }
 
-  // หน่วงเวลาเล็กน้อย
-  delay(10);
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print("Menu: ");
+        lcd.setCursor(6, 0);
+        lcd.print(menu);
+
+        // Update current menu immediately
+        current_menu = menu;
+        last_action_time = millis(); // Reset the timer for debounce
+    }
+
+    // Execute the current menu
+    if (current_menu == 0) {
+        turnOffAllLEDs();
+    } else {
+        executeMenu(current_menu);
+    }
+
+    last_next_state = current_next_state;
 }
 
+void executeMenu(int menu) {
+    switch (menu) {
+        case 1:
+            turnOnAllLEDs();
+            break;
+        case 2:
+            blinkAlternateLEDs();
+            break;
+        case 3:
+            rotateSingleLED();
+            break;
+        case 4:
+            blinkInPairs();
+            break;
+        case 5:
+            sequentialOnOff();
+            break;
+        case 6:
+            blinkAllLEDs();
+            break;
+        default:
+            turnOffAllLEDs();
+            break;
+    }
+}
 
+void turnOnAllLEDs() {
+    for (int i = 0; i < num_leds; i++) {
+        digitalWrite(leds[i], HIGH);
+    }
+}
 
+void turnOffAllLEDs() {
+    for (int i = 0; i < num_leds; i++) {
+        digitalWrite(leds[i], LOW);
+    }
+}
 
+void blinkAlternateLEDs() {
+    static unsigned long last_time = 0;
+    static bool state = false;
 
+    if (millis() - last_time >= 300) {
+        last_time = millis();
+        state = !state;
+        for (int i = 0; i < num_leds; i++) {
+            digitalWrite(leds[i], (i % 2 == 0) == state ? HIGH : LOW);
+        }
+    }
+}
 
+void rotateSingleLED() {
+    static int current_led = 0;
+    static unsigned long last_time = 0;
 
+    if (millis() - last_time >= 200) {
+        last_time = millis();
+        turnOffAllLEDs();
+        digitalWrite(leds[current_led], HIGH);
+        current_led = (current_led + 1) % num_leds;
+    }
+}
+
+void blinkInPairs() {
+    static unsigned long last_time = 0;
+    static bool state = false;
+
+    if (millis() - last_time >= 500) {
+        last_time = millis();
+        state = !state;
+        if (state) {
+            for (int i = 0; i < num_leds; i += 2) {
+                digitalWrite(leds[i], HIGH);
+                if (i + 1 < num_leds) {
+                    digitalWrite(leds[i + 1], HIGH);
+                }
+            }
+        } else {
+            turnOffAllLEDs();
+        }
+    }
+}
+
+void sequentialOnOff() {
+    static int current_led = 0;
+    static bool ascending = true;
+    static unsigned long last_time = 0;
+
+    if (millis() - last_time >= 200) {
+        last_time = millis();
+        turnOffAllLEDs();
+        digitalWrite(leds[current_led], HIGH);
+
+        if (ascending) {
+            current_led++;
+            if (current_led >= num_leds) {
+                current_led = num_leds - 1;
+                ascending = false;
+            }
+        } else {
+            current_led--;
+            if (current_led < 0) {
+                current_led = 0;
+                ascending = true;
+            }
+        }
+    }
+}
+
+void blinkAllLEDs() {
+    static unsigned long last_time = 0;
+    static bool state = false;
+
+    if (millis() - last_time >= 500) {
+        last_time = millis();
+        state = !state;
+        if (state) {
+            turnOnAllLEDs();
+        } else {
+            turnOffAllLEDs();
+        }
+    }
+}
